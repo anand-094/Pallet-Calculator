@@ -393,7 +393,35 @@ function App(){
   const[show,setShow]=useState(false);
   const[inputMode,setInputMode]=useState("manual"); // "manual" | "excel"
 
-  const pl=PS[pid];
+  // Custom pallet fields
+  const[cUnit,setCUnit]=useState("cm");         // dimension unit
+  const[cWtUnit,setCWtUnit]=useState("kg");     // weight unit
+  const[cL,setCL]=useState("");                 // pallet length
+  const[cW,setCW]=useState("");                 // pallet width
+  const[cMaxH,setCMaxH]=useState("");           // max total stack height (incl. pallet)
+  const[cThick,setCThick]=useState("");         // pallet board thickness
+  const[cMaxWt,setCMaxWt]=useState("");         // max load weight
+  const[cEmptyWt,setCEmptyWt]=useState("");     // empty pallet weight (tare)
+
+  // Derive the active pallet spec — either from PS or built from custom inputs
+  const pl = useMemo(()=>{
+    if(pid!=="custom") return PS[pid];
+    const L=toCm(cL,cUnit)||120, W=toCm(cW,cUnit)||100;
+    const palletH=toCm(cThick,cUnit)||15;
+    const maxH=toCm(cMaxH,cUnit)||180;
+    const maxWeight=toKg(cMaxWt,cWtUnit)||500;
+    const emptyWt=toKg(cEmptyWt,cWtUnit)||0;
+    return{
+      id:"custom", region:"CUSTOM", stackMode:"custom",
+      label:"Custom Pallet",
+      L, W, palletH, maxH, maxWeight, emptyWt,
+      dims:`${cL||"?"}×${cW||"?"} ${cUnit}`,
+      stackNote:`Max ${cMaxH||"?"} ${cUnit} total height`,
+      doubleNote:null,
+      color:"#0F766E", bg:"#F0FDFA", border:"#99F6E4",
+    };
+  },[pid,cL,cW,cMaxH,cThick,cMaxWt,cEmptyWt,cUnit,cWtUnit]);
+
   const res=useMemo(()=>show?boxes.map(b=>calcRow(pl,b)).filter(Boolean):[],[show,pl,boxes]);
   const totPl=res.reduce((s,r)=>s+(r.palletsNeeded||0),0);
   const totBx=boxes.reduce((s,b)=>s+(parseInt(b.qty)||0),0);
@@ -446,8 +474,76 @@ function App(){
               </div>
             </div>
           ))}
+
+          {/* Custom pallet option */}
+          <div style={{marginBottom:"14px"}}>
+            <div style={{fontSize:"11px",fontWeight:600,color:"#6B7280",marginBottom:"7px",letterSpacing:".4px"}}>⚙️ Custom</div>
+            <div className={`pc${pid==="custom"?" sel":""}`}
+              onClick={()=>{setPid("custom");setShow(false);}}
+              style={{background:pid==="custom"?"#F0FDFA":"#fff",border:`1.5px solid ${pid==="custom"?"#0F766E":"#E5E7EB"}`,borderRadius:"10px",padding:"12px 14px",cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center",color:"#0F766E",marginBottom:"10px"}}>
+              <div>
+                <div style={{display:"flex",alignItems:"center",gap:"6px",marginBottom:"3px"}}>
+                  <span style={{fontSize:"12px",fontWeight:700,color:"#111827"}}>Custom Pallet</span>
+                  <span style={{fontSize:"9px",fontWeight:600,padding:"2px 6px",borderRadius:"4px",background:"#F0FDFA",color:"#0F766E",border:"1px solid #99F6E4"}}>Custom</span>
+                </div>
+                <div style={{fontSize:"10px",color:"#6B7280"}}>Enter your own pallet dimensions and weight limits</div>
+              </div>
+              <div style={{width:"15px",height:"15px",borderRadius:"50%",border:`2px solid ${pid==="custom"?"#0F766E":"#D1D5DB"}`,background:pid==="custom"?"#0F766E":"#fff",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center"}}>
+                {pid==="custom"&&<div style={{width:"5px",height:"5px",background:"#fff",borderRadius:"50%"}}/>}
+              </div>
+            </div>
+
+            {/* Custom inputs panel */}
+            {pid==="custom"&&(
+              <div style={{background:"#fff",border:"1.5px solid #99F6E4",borderRadius:"10px",padding:"18px",marginTop:"4px"}}>
+                {/* Unit selectors */}
+                <div style={{display:"flex",alignItems:"center",gap:"16px",marginBottom:"16px",flexWrap:"wrap"}}>
+                  <div style={{display:"flex",alignItems:"center",gap:"8px"}}>
+                    <span style={{fontSize:"11px",fontWeight:600,color:"#374151"}}>Dimensions:</span>
+                    <div style={{display:"flex",border:"1.5px solid #E5E7EB",borderRadius:"6px",overflow:"hidden",height:"30px"}}>
+                      {["cm","in"].map(u=><button key={u} onClick={()=>{setCUnit(u);setShow(false);}} style={{padding:"0 12px",background:cUnit===u?"#0F766E":"#FAFAFA",color:cUnit===u?"#fff":"#9CA3AF",border:"none",cursor:"pointer",fontSize:"11px",fontWeight:700,transition:"background .15s"}}>{u}</button>)}
+                    </div>
+                  </div>
+                  <div style={{display:"flex",alignItems:"center",gap:"8px"}}>
+                    <span style={{fontSize:"11px",fontWeight:600,color:"#374151"}}>Weight:</span>
+                    <div style={{display:"flex",border:"1.5px solid #E5E7EB",borderRadius:"6px",overflow:"hidden",height:"30px"}}>
+                      {["kg","lbs"].map(u=><button key={u} onClick={()=>{setCWtUnit(u);setShow(false);}} style={{padding:"0 12px",background:cWtUnit===u?"#7C3AED":"#FAFAFA",color:cWtUnit===u?"#fff":"#9CA3AF",border:"none",cursor:"pointer",fontSize:"11px",fontWeight:700,transition:"background .15s"}}>{u}</button>)}
+                    </div>
+                  </div>
+                </div>
+                {/* Input grid */}
+                <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(180px,1fr))",gap:"10px"}}>
+                  {[
+                    {label:`Pallet Length (${cUnit})`,val:cL,set:setCL,hint:"e.g. 120"},
+                    {label:`Pallet Width (${cUnit})`,val:cW,set:setCW,hint:"e.g. 100"},
+                    {label:`Max Stack Height (${cUnit})`,val:cMaxH,set:setCMaxH,hint:"Total incl. pallet"},
+                    {label:`Pallet Thickness (${cUnit})`,val:cThick,set:setCThick,hint:"Board height e.g. 15"},
+                    {label:`Max Load Weight (${cWtUnit})`,val:cMaxWt,set:setCMaxWt,hint:"Payload limit"},
+                    {label:`Empty Pallet Weight (${cWtUnit})`,val:cEmptyWt,set:setCEmptyWt,hint:"Tare weight"},
+                  ].map(({label,val,set,hint})=>(
+                    <div key={label}>
+                      <div style={{fontSize:"10px",fontWeight:600,color:"#6B7280",marginBottom:"4px"}}>{label}</div>
+                      <input type="number" value={val} onChange={e=>{set(e.target.value);setShow(false);}} placeholder={hint} min="0" step="0.1"
+                        style={{width:"100%",border:"1.5px solid #E5E7EB",borderRadius:"6px",padding:"8px 10px",fontSize:"13px",fontWeight:600,color:"#0F766E",background:"#F0FDFA"}}/>
+                    </div>
+                  ))}
+                </div>
+                {/* Validation hints */}
+                {(!cL||!cW||!cMaxH||!cThick)&&<div style={{marginTop:"10px",fontSize:"11px",color:"#D97706",background:"#FFFBEB",border:"1px solid #FDE68A",borderRadius:"6px",padding:"8px 12px"}}>
+                  ⚠ Fill in all four dimension fields (Length, Width, Max Stack Height, Pallet Thickness) before calculating.
+                </div>}
+              </div>
+            )}
+          </div>
           <div style={{background:"#fff",border:`1px solid ${pl.border}`,borderLeft:`4px solid ${pl.color}`,borderRadius:"8px",padding:"13px 18px",display:"flex",gap:"26px",flexWrap:"wrap",marginTop:"6px"}}>
-            {[["Footprint",`${pl.L}×${pl.W} cm`],["Pallet H",`${pl.palletH} cm`],["Usable Stack",`${(pl.maxH-pl.palletH).toFixed(0)} cm`],["Max Total H",`${pl.maxH} cm`],["Max Weight",`${pl.maxWeight} kg / ${(pl.maxWeight*2.205).toFixed(0)} lbs`]].map(([l,v])=>(
+            {[
+              ["Footprint",`${pl.L.toFixed(0)}×${pl.W.toFixed(0)} cm`],
+              ["Pallet Thickness",`${pl.palletH.toFixed(1)} cm`],
+              ["Usable Stack",`${(pl.maxH-pl.palletH).toFixed(0)} cm`],
+              ["Max Total Height",`${pl.maxH.toFixed(0)} cm`],
+              ["Max Load Weight",`${pl.maxWeight} kg / ${(pl.maxWeight/LB2KG).toFixed(0)} lbs`],
+              ...(pl.emptyWt?[["Empty Pallet Wt",`${pl.emptyWt.toFixed(1)} kg / ${(pl.emptyWt/LB2KG).toFixed(1)} lbs`]]:[]),
+            ].map(([l,v])=>(
               <div key={l}><div style={{fontSize:"10px",color:"#9CA3AF",marginBottom:"2px"}}>{l}</div><div style={{fontSize:"14px",fontWeight:700,color:pl.color}}>{v}</div></div>
             ))}
           </div>
@@ -530,10 +626,13 @@ function App(){
         </Sec>
 
         {/* ── CALCULATE ── */}
-        <button className="calc-btn" onClick={()=>setShow(true)}
-          style={{width:"100%",background:"#2563EB",color:"#fff",border:"none",padding:"16px",borderRadius:"10px",fontSize:"15px",fontWeight:700,cursor:"pointer",marginBottom:"40px",letterSpacing:".3px",transition:"all .2s"}}>
-          Calculate Pallets →
-        </button>
+        {pid==="custom"&&(!cL||!cW||!cMaxH||!cThick)
+          ? <div style={{width:"100%",background:"#F3F4F6",color:"#9CA3AF",border:"none",padding:"16px",borderRadius:"10px",fontSize:"15px",fontWeight:700,textAlign:"center",marginBottom:"40px"}}>Fill in custom pallet dimensions above to calculate</div>
+          : <button className="calc-btn" onClick={()=>setShow(true)}
+              style={{width:"100%",background:"#2563EB",color:"#fff",border:"none",padding:"16px",borderRadius:"10px",fontSize:"15px",fontWeight:700,cursor:"pointer",marginBottom:"40px",letterSpacing:".3px",transition:"all .2s"}}>
+              Calculate Pallets →
+            </button>
+        }
 
         {/* ── RESULTS ── */}
         {show&&res.length>0&&(
