@@ -6,6 +6,8 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+<!-- SheetJS for Excel parsing and generation -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Syne:wght@700;800&display=swap" rel="stylesheet"/>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
@@ -26,23 +28,31 @@ input:focus{outline:2px solid #2563EB;outline-offset:0;border-color:#2563EB!impo
 tr:hover td{background:#F9FAFB}
 ::-webkit-scrollbar{width:5px;height:5px}
 ::-webkit-scrollbar-thumb{background:#D1D5DB;border-radius:3px}
+.drop-zone{transition:border-color .2s,background .2s}
+.drop-zone.drag-over{border-color:#2563EB!important;background:#EFF6FF!important}
+.tab-btn{transition:all .15s}
 </style>
 </head>
 <body><div id="root"></div>
 <script type="text/babel">
-const {useState,useMemo}=React;
+const {useState,useMemo,useRef,useCallback}=React;
 const IN2CM=2.54;
+const LB2KG=0.453592;
+const toKg=(v,u)=>u==="lbs"?(parseFloat(v)||0)*LB2KG:parseFloat(v)||0;
+const fmtWt=(kg,u)=>u==="lbs"?(kg/LB2KG).toFixed(2)+" lbs":(kg).toFixed(2)+" kg";
 
+// ── PALLET SPECS ──────────────────────────────────────────────────────────────
 const PS={
   us_single:{id:"us_single",region:"US",stackMode:"single",label:"US — Single Stack",L:121.9,W:101.6,palletH:15.2,maxH:182.9,maxWeight:680,dims:'48"×40"',stackNote:'Max 72" total (incl. pallet)',doubleNote:null,color:"#D97706",bg:"#FFFBEB",border:"#FDE68A"},
   us_double:{id:"us_double",region:"US",stackMode:"double",label:"US — Double Stack",L:121.9,W:101.6,palletH:15.2,maxH:127,maxWeight:680,dims:'48"×40"',stackNote:'Max 50" per pallet (100" stacked)',doubleNote:'Each pallet ≤ 50" → two stack to ≤ 100"',color:"#B45309",bg:"#FFF7ED",border:"#FED7AA"},
   eu_single:{id:"eu_single",region:"EU",stackMode:"single",label:"EU — Single Stack",L:120,W:80,palletH:14.4,maxH:180,maxWeight:500,dims:"120×80cm",stackNote:"Max 180 cm total (incl. pallet)",doubleNote:null,color:"#0369A1",bg:"#F0F9FF",border:"#BAE6FD"},
-  eu_double_de:{id:"eu_double_de",region:"EU",stackMode:"double",label:"EU Double — DE/CEE/TR",L:120,W:80,palletH:14.4,maxH:135,maxWeight:500,dims:"120×80cm",stackNote:"Max 135 cm per pallet (270 cm stacked)",doubleNote:"Each pallet ≤ 135 cm → two stack to ≤ 270 cm",color:"#0284C7",bg:"#E0F2FE",border:"#7DD3FC"},
-  eu_double_fr:{id:"eu_double_fr",region:"EU",stackMode:"double",label:"EU Double — FR/IT/ES",L:120,W:80,palletH:14.4,maxH:150,maxWeight:500,dims:"120×80cm",stackNote:"Max 150 cm per pallet (300 cm stacked)",doubleNote:"Each pallet ≤ 150 cm → two stack to ≤ 300 cm",color:"#0EA5E9",bg:"#F0F9FF",border:"#BAE6FD"},
+  eu_dde:{id:"eu_dde",region:"EU",stackMode:"double",label:"EU Double — DE/CEE/TR",L:120,W:80,palletH:14.4,maxH:135,maxWeight:500,dims:"120×80cm",stackNote:"Max 135 cm per pallet (270 cm stacked)",doubleNote:"Each pallet ≤ 135 cm → two stack to ≤ 270 cm",color:"#0284C7",bg:"#E0F2FE",border:"#7DD3FC"},
+  eu_dfr:{id:"eu_dfr",region:"EU",stackMode:"double",label:"EU Double — FR/IT/ES",L:120,W:80,palletH:14.4,maxH:150,maxWeight:500,dims:"120×80cm",stackNote:"Max 150 cm per pallet (300 cm stacked)",doubleNote:"Each pallet ≤ 150 cm → two stack to ≤ 300 cm",color:"#0EA5E9",bg:"#F0F9FF",border:"#BAE6FD"},
   uk_single:{id:"uk_single",region:"UK",stackMode:"single",label:"UK — Single Stack",L:120,W:100,palletH:15,maxH:180,maxWeight:500,dims:"120×100cm",stackNote:"Max 180 cm total (incl. pallet)",doubleNote:null,color:"#7C3AED",bg:"#F5F3FF",border:"#DDD6FE"},
   uk_double:{id:"uk_double",region:"UK",stackMode:"double",label:"UK — Double Stack",L:120,W:100,palletH:15,maxH:150,maxWeight:500,dims:"120×100cm",stackNote:"Max 150 cm per pallet (300 cm stacked)",doubleNote:"Each pallet ≤ 150 cm → two stack to ≤ 300 cm",color:"#6D28D9",bg:"#EDE9FE",border:"#C4B5FD"},
 };
 
+// ── HELPERS ───────────────────────────────────────────────────────────────────
 const toCm=(v,u)=>u==="in"?(parseFloat(v)||0)*IN2CM:parseFloat(v)||0;
 const BC=p=>p>100?"#EF4444":p>90?"#F59E0B":"#22C55E";
 const ST=r=>!r.fitsFootprint?{l:"Too wide/long",c:"#EF4444",bg:"#FEF2F2"}:!r.fitsHeight?{l:"Box too tall",c:"#EF4444",bg:"#FEF2F2"}:r.heightPct>95?{l:"Near limit",c:"#F59E0B",bg:"#FFFBEB"}:{l:"✓ Fits",c:"#16A34A",bg:"#F0FDF4"};
@@ -50,95 +60,59 @@ const VC=["#2563EB","#0369A1","#7C3AED","#16A34A","#DC2626","#D97706","#0891B2",
 const SEG_CLRS=["#2563EB","#059669","#D97706"];
 
 // ── STACKING LOGIC ────────────────────────────────────────────────────────────
-// For a box (L,W,H), returns all 3 height-choice orientations.
-// Each orientation: which box dimension is used as the stack height,
-// and which pair fills the pallet floor (best of both rotations).
 function getOrientations(L,W,H,pL,pW,canRotate){
-  if(!canRotate){
-    // Strict: H is height, L along pallet L, W along pallet W
-    const r=Math.floor(pL/L),c=Math.floor(pW/W);
-    return [{boxH:H,floorL:L,floorW:W,perLayer:r*c,rows:r,cols:c}];
-  }
-  const dims=[L,W,H];
-  return dims.map((boxH,hi)=>{
-    const [d0,d1]=dims.filter((_,i)=>i!==hi);
-    const r1=Math.floor(pL/d0),c1=Math.floor(pW/d1);
-    const r2=Math.floor(pL/d1),c2=Math.floor(pW/d0);
-    if(r1*c1>=r2*c2) return{boxH,floorL:d0,floorW:d1,perLayer:r1*c1,rows:r1,cols:c1};
-    return{boxH,floorL:d1,floorW:d0,perLayer:r2*c2,rows:r2,cols:c2};
+  if(!canRotate){const r=Math.floor(pL/L),c=Math.floor(pW/W);return[{boxH:H,floorL:L,floorW:W,perLayer:r*c,rows:r,cols:c}];}
+  return [L,W,H].map((boxH,hi)=>{
+    const[d0,d1]=[L,W,H].filter((_,i)=>i!==hi);
+    const r1=Math.floor(pL/d0),c1=Math.floor(pW/d1),r2=Math.floor(pL/d1),c2=Math.floor(pW/d0);
+    return r1*c1>=r2*c2?{boxH,floorL:d0,floorW:d1,perLayer:r1*c1,rows:r1,cols:c1}:{boxH,floorL:d1,floorW:d0,perLayer:r2*c2,rows:r2,cols:c2};
   });
 }
-
-// Finds the optimal stacking plan (single or 2-phase mixed orientation).
-// Tries every combination of (primary orientation × primary layer count × secondary orientation)
-// to maximise total boxes per pallet.
-function bestStack(orientations,availH){
+function bestStack(orients,availH){
   let best={maxBoxes:0,plan:[]};
-  const tryPlan=plan=>{
-    const total=plan.reduce((s,seg)=>s+seg.perLayer*seg.layers,0);
-    if(total>best.maxBoxes) best={maxBoxes:total,plan:plan.map(s=>({...s}))};
-  };
-  // Single orientation
-  for(const o of orientations){
-    if(o.boxH>availH||o.perLayer===0) continue;
-    const layers=Math.floor(availH/o.boxH);
-    if(layers>0) tryPlan([{...o,layers}]);
-  }
-  // Two-orientation combos
-  for(const p of orientations){
-    if(p.perLayer===0||p.boxH>availH) continue;
+  const try_=(plan)=>{const t=plan.reduce((s,sg)=>s+sg.perLayer*sg.layers,0);if(t>best.maxBoxes)best={maxBoxes:t,plan:plan.map(s=>({...s}))};};
+  for(const o of orients){if(o.boxH>availH||!o.perLayer)continue;const l=Math.floor(availH/o.boxH);if(l>0)try_([{...o,layers:l}]);}
+  for(const p of orients){
+    if(!p.perLayer||p.boxH>availH)continue;
     const maxPL=Math.floor(availH/p.boxH);
     for(let pL=0;pL<=maxPL;pL++){
       const rem=availH-pL*p.boxH;
-      for(const s of orientations){
-        if(s.boxH===p.boxH||s.perLayer===0||s.boxH>rem) continue;
-        const sL=Math.floor(rem/s.boxH);
-        if(sL===0) continue;
-        const plan=[];
-        if(pL>0) plan.push({...p,layers:pL});
-        plan.push({...s,layers:sL});
-        tryPlan(plan);
+      for(const s of orients){
+        if(s.boxH===p.boxH||!s.perLayer||s.boxH>rem)continue;
+        const sL=Math.floor(rem/s.boxH);if(!sL)continue;
+        const plan=[];if(pL>0)plan.push({...p,layers:pL});plan.push({...s,layers:sL});try_(plan);
       }
     }
   }
   return best;
 }
-
-// Given N boxes and a stacking plan, distributes boxes across segments and computes total height.
-function stackPallet(boxCount,plan,palletH){
-  let rem=boxCount,totalH=palletH;
-  const segs=[];
+function stackPallet(n,plan,palletH){
+  let rem=n,totalH=palletH;const segs=[];
   for(const seg of plan){
-    if(rem<=0) break;
-    const n=Math.min(rem,seg.perLayer*seg.layers);
-    const ly=Math.ceil(n/seg.perLayer);
-    const sh=ly*seg.boxH;
-    totalH+=sh;
-    segs.push({...seg,layersUsed:ly,boxesInSeg:n,segH:sh});
-    rem-=n;
+    if(rem<=0)break;
+    const b=Math.min(rem,seg.perLayer*seg.layers),ly=Math.ceil(b/seg.perLayer),sh=ly*seg.boxH;
+    totalH+=sh;segs.push({...seg,layersUsed:ly,boxesInSeg:b,segH:sh});rem-=b;
   }
   return{segs,totalH};
 }
 
 let uid=0;
-const mkBox=()=>({id:String(++uid),name:"",l:"",w:"",h:"",qty:"",wt:"",unit:"cm",rotate:true});
+const mkBox=()=>({id:String(++uid),name:"",l:"",w:"",h:"",qty:"",wt:"",unit:"cm",wtUnit:"kg",rotate:true});
 
 function calcRow(pl,box){
   const L=toCm(box.l,box.unit),W=toCm(box.w,box.unit),H=toCm(box.h,box.unit);
   const qty=parseInt(box.qty)||0,wt=parseFloat(box.wt)||0;
-  if(!L||!W||!H||!qty) return null;
+  const wtKg=toKg(box.wt,box.wtUnit||"kg");
+  if(!L||!W||!H||!qty)return null;
   const availH=pl.maxH-pl.palletH;
   const dims=[L,W,H];
   let fitsFootprint,fitsHeight;
   if(box.rotate){
     fitsFootprint=dims.some((_,hi)=>{const[d0,d1]=dims.filter((__,i)=>i!==hi);return(d0<=pl.L&&d1<=pl.W)||(d1<=pl.L&&d0<=pl.W);});
     fitsHeight=dims.some(d=>d<=availH);
-  }else{
-    fitsFootprint=L<=pl.L&&W<=pl.W;
-    fitsHeight=H<=availH;
-  }
-  const orientations=getOrientations(L,W,H,pl.L,pl.W,box.rotate);
-  const{maxBoxes:maxPerPallet,plan}=bestStack(orientations,availH);
+  }else{fitsFootprint=L<=pl.L&&W<=pl.W;fitsHeight=H<=availH;}
+  const orients=getOrientations(L,W,H,pl.L,pl.W,box.rotate);
+  const{maxBoxes:maxPerPallet,plan}=bestStack(orients,availH);
   const palletsNeeded=maxPerPallet>0?Math.ceil(qty/maxPerPallet):null;
   const palletDetails=[];
   if(palletsNeeded){
@@ -148,18 +122,81 @@ function calcRow(pl,box){
       palletDetails.push({palletNo:p+1,boxes:n,segs,totalH,heightPct:(totalH/pl.maxH)*100});
     }
   }
-  const totalWt=wt*qty;
+  const totalWt=wtKg*qty;
   const heightPct=palletDetails.length?palletDetails[palletDetails.length-1].heightPct:0;
   const primarySeg=plan[0]||{perLayer:0,rows:0,cols:0,boxH:H,floorL:L,floorW:W};
   const planLabel=plan.map(s=>`${s.perLayer}×${s.layers}`).join(' + ')||'—';
-  return{
-    ...box,L,W,H,qty,wt,totalWt,maxPerPallet,palletsNeeded,palletDetails,
-    fitsFootprint,fitsHeight,heightPct,plan,planLabel,isMixed:plan.length>1,
-    fit:{rows:primarySeg.rows,cols:primarySeg.cols,floorL:primarySeg.floorL,floorW:primarySeg.floorW},
-  };
+  return{...box,L,W,H,qty,wt,wtKg,totalWt,maxPerPallet,palletsNeeded,palletDetails,fitsFootprint,fitsHeight,heightPct,plan,planLabel,isMixed:plan.length>1,fit:{rows:primarySeg.rows,cols:primarySeg.cols,floorL:primarySeg.floorL,floorW:primarySeg.floorW}};
 }
 
-// ── COMPONENTS ───────────────────────────────────────────────────────────────
+// ── EXCEL HELPERS ─────────────────────────────────────────────────────────────
+// Download a pre-filled template .xlsx
+function downloadTemplate(){
+  const wb=XLSX.utils.book_new();
+  const headers=[["Name / SKU","Length","Width","Height","Dim Unit (cm or in)","Quantity","Weight per box","Weight Unit (kg or lbs)","Rotation (Yes/No)"]];
+  const examples=[
+    ["Box Type A","60","40","30","cm","100","5.2","kg","Yes"],
+    ["Box Type B","24","18","12","in","50","8.4","lbs","No"],
+    ["Box Type C","50","50","50","cm","200","8","kg","Yes"],
+  ];
+  const ws=XLSX.utils.aoa_to_sheet([...headers,...examples]);
+  ws['!cols']=[{wch:18},{wch:10},{wch:10},{wch:10},{wch:18},{wch:10},{wch:16},{wch:20},{wch:20}];
+  XLSX.utils.book_append_sheet(wb,ws,"Box Dimensions");
+  XLSX.writeFile(wb,"pallet_calculator_template.xlsx");
+}
+
+// Parse uploaded xlsx/csv into box rows
+function parseExcel(file,onDone,onError){
+  const reader=new FileReader();
+  reader.onload=e=>{
+    try{
+      const wb=XLSX.read(e.target.result,{type:"binary"});
+      const ws=wb.Sheets[wb.SheetNames[0]];
+      const rows=XLSX.utils.sheet_to_json(ws,{header:1,defval:""});
+      if(rows.length<2){onError("File appears empty — need at least one data row.");return;}
+      // Find header row (first row containing recognisable column names)
+      const hRow=rows[0].map(h=>String(h).toLowerCase().trim());
+      const ci=(keywords)=>{const idx=hRow.findIndex(h=>keywords.some(k=>h.includes(k)));return idx>=0?idx:null;};
+      const iName=ci(["name","sku","description","item","product"])??0;
+      const iL=ci(["length","len","l"])??1;
+      const iW=ci(["width","wid","w"])??2;
+      const iH=ci(["height","hei","h"])??3;
+      const iUnit=ci(["dim unit","unit","cm","inch"])??4;
+      const iQty=ci(["qty","quantity","count","units"])??5;
+      const iWt=ci(["weight","kg","wt","mass","lbs","lb"])??6;
+      const iWtUnit=ci(["weight unit","wt unit","wtunit","mass unit"])??7;
+      const iRot=ci(["rotat","rotate","spin","orient"])??8;
+      const boxes=[];
+      for(let i=1;i<rows.length;i++){
+        const r=rows[i];
+        const l=String(r[iL]||"").replace(/[^\d.]/g,"");
+        const w=String(r[iW]||"").replace(/[^\d.]/g,"");
+        const h=String(r[iH]||"").replace(/[^\d.]/g,"");
+        const qty=String(r[iQty]||"").replace(/[^\d]/g,"");
+        if(!l&&!w&&!h&&!qty)continue; // skip blank rows
+        const unitRaw=String(r[iUnit]||"cm").toLowerCase();
+        const unit=unitRaw.includes("in")||unitRaw.includes('"')?"in":"cm";
+        const wtUnitRaw=String(r[iWtUnit]||"kg").toLowerCase();
+        const wtUnit=wtUnitRaw.includes("lb")?"lbs":"kg";
+        const rotRaw=String(r[iRot]||"yes").toLowerCase();
+        const rotate=!rotRaw.includes("no")&&!rotRaw.includes("0")&&!rotRaw.includes("false");
+        boxes.push({
+          id:String(++uid),
+          name:String(r[iName]||`Box ${i}`).trim(),
+          l,w,h,qty,
+          wt:String(r[iWt]||"").replace(/[^\d.]/g,""),
+          unit,wtUnit,rotate,
+        });
+      }
+      if(!boxes.length){onError("No valid data rows found. Make sure your file has Length, Width, Height and Quantity columns.");return;}
+      onDone(boxes);
+    }catch(err){onError("Could not read file: "+err.message);}
+  };
+  reader.onerror=()=>onError("Failed to read the file.");
+  reader.readAsBinaryString(file);
+}
+
+// ── UI COMPONENTS ─────────────────────────────────────────────────────────────
 function Toggle({v,onChange}){
   return<div style={{display:"flex",alignItems:"center",gap:"8px"}}>
     <div onClick={()=>onChange(!v)} style={{width:"44px",height:"24px",borderRadius:"12px",background:v?"#16A34A":"#E5E7EB",position:"relative",cursor:"pointer",transition:"background .2s",flexShrink:0}}>
@@ -182,83 +219,125 @@ function Sec({n,title,children,action}){
   </div>;
 }
 
-// Pallet illustration card with mixed-orientation side elevation
+// ── EXCEL UPLOAD ZONE ─────────────────────────────────────────────────────────
+function UploadZone({onBoxes}){
+  const[dragging,setDragging]=useState(false);
+  const[error,setError]=useState("");
+  const[fileName,setFileName]=useState("");
+  const inputRef=useRef();
+
+  const handle=useCallback(file=>{
+    if(!file)return;
+    const name=file.name.toLowerCase();
+    if(!name.endsWith(".xlsx")&&!name.endsWith(".xls")&&!name.endsWith(".csv")){
+      setError("Please upload an .xlsx, .xls, or .csv file.");return;
+    }
+    setError("");setFileName(file.name);
+    parseExcel(file,boxes=>{onBoxes(boxes);},err=>{setError(err);setFileName("");});
+  },[onBoxes]);
+
+  const onDrop=useCallback(e=>{
+    e.preventDefault();setDragging(false);
+    handle(e.dataTransfer.files[0]);
+  },[handle]);
+
+  return(
+    <div style={{marginBottom:"16px"}}>
+      {/* Drag-drop area */}
+      <div className={`drop-zone${dragging?" drag-over":""}`}
+        onDragOver={e=>{e.preventDefault();setDragging(true);}}
+        onDragLeave={()=>setDragging(false)}
+        onDrop={onDrop}
+        onClick={()=>inputRef.current.click()}
+        style={{border:"2px dashed #D1D5DB",borderRadius:"10px",padding:"28px 20px",textAlign:"center",cursor:"pointer",background:dragging?"#EFF6FF":"#fff",transition:"all .2s"}}>
+        <input ref={inputRef} type="file" accept=".xlsx,.xls,.csv" style={{display:"none"}} onChange={e=>handle(e.target.files[0])}/>
+        <div style={{fontSize:"28px",marginBottom:"8px"}}>📂</div>
+        <div style={{fontSize:"13px",fontWeight:600,color:"#374151",marginBottom:"4px"}}>
+          {fileName?"✓ "+fileName:"Drag & drop your Excel file here"}
+        </div>
+        <div style={{fontSize:"11px",color:"#9CA3AF"}}>
+          {fileName?"Click to replace file":"or click to browse · Supports .xlsx, .xls, .csv"}
+        </div>
+      </div>
+      {error&&<div style={{marginTop:"8px",background:"#FEF2F2",border:"1px solid #FECACA",borderRadius:"7px",padding:"9px 14px",fontSize:"12px",color:"#DC2626"}}>⚠ {error}</div>}
+      {/* Template download */}
+      <div style={{marginTop:"10px",display:"flex",alignItems:"center",gap:"10px",flexWrap:"wrap"}}>
+        <button onClick={e=>{e.stopPropagation();downloadTemplate();}}
+          style={{display:"flex",alignItems:"center",gap:"6px",background:"#F0FDF4",border:"1.5px solid #BBF7D0",color:"#15803D",padding:"7px 14px",borderRadius:"7px",fontSize:"12px",fontWeight:600,cursor:"pointer"}}>
+          ⬇ Download Template
+        </button>
+        <span style={{fontSize:"11px",color:"#9CA3AF"}}>
+          Download the template, fill in your box data, then upload it above.
+        </span>
+      </div>
+      {/* Column guide */}
+      <div style={{marginTop:"10px",background:"#F9FAFB",border:"1px solid #E5E7EB",borderRadius:"7px",padding:"10px 14px",fontSize:"11px",color:"#6B7280",lineHeight:1.8}}>
+        <strong style={{color:"#374151"}}>Expected columns</strong> (column names are flexible — we auto-detect by keyword):<br/>
+        <span style={{fontFamily:"monospace",background:"#F3F4F6",padding:"1px 5px",borderRadius:"3px",marginRight:"4px"}}>Name / SKU</span>
+        <span style={{fontFamily:"monospace",background:"#F3F4F6",padding:"1px 5px",borderRadius:"3px",marginRight:"4px"}}>Length</span>
+        <span style={{fontFamily:"monospace",background:"#F3F4F6",padding:"1px 5px",borderRadius:"3px",marginRight:"4px"}}>Width</span>
+        <span style={{fontFamily:"monospace",background:"#F3F4F6",padding:"1px 5px",borderRadius:"3px",marginRight:"4px"}}>Height</span>
+        <span style={{fontFamily:"monospace",background:"#F3F4F6",padding:"1px 5px",borderRadius:"3px",marginRight:"4px"}}>Dim Unit (cm/in)</span>
+        <span style={{fontFamily:"monospace",background:"#F3F4F6",padding:"1px 5px",borderRadius:"3px",marginRight:"4px"}}>Quantity</span>
+        <span style={{fontFamily:"monospace",background:"#F3F4F6",padding:"1px 5px",borderRadius:"3px",marginRight:"4px"}}>Weight per box</span>
+        <span style={{fontFamily:"monospace",background:"#F3F4F6",padding:"1px 5px",borderRadius:"3px",marginRight:"4px"}}>Weight Unit (kg/lbs)</span>
+        <span style={{fontFamily:"monospace",background:"#F3F4F6",padding:"1px 5px",borderRadius:"3px"}}>Rotation (Yes/No)</span>
+      </div>
+    </div>
+  );
+}
+
+// ── PALLET CARD ───────────────────────────────────────────────────────────────
 function PalletCard({g,pallet,accent}){
-  const SC=0.40,mPx=pallet.maxH*SC,plPx=pallet.palletH*SC;
-  // pre-compute segment visual positions (bottom-up)
+  const SC_=0.40,mPx=pallet.maxH*SC_,plPx=pallet.palletH*SC_;
   let curBot=plPx;
-  const segViz=g.segs.map((seg,si)=>{
-    const bPx=seg.boxH*SC;
-    const v={seg,si,bottom:curBot,bPx,color:SEG_CLRS[si%SEG_CLRS.length]};
-    curBot+=seg.segH*SC;
-    return v;
-  });
+  const segViz=g.segs.map((seg,si)=>{const bPx=seg.boxH*SC_;const v={seg,si,bottom:curBot,bPx,color:SEG_CLRS[si%SEG_CLRS.length]};curBot+=seg.segH*SC_;return v;});
   const totalPx=curBot;
-  // top-view: use first segment
   const fs=g.segs[0]||{rows:0,cols:0,floorL:0,floorW:0,perLayer:0,boxH:0};
-  const s2=58/Math.max(pallet.L,pallet.W);
-  const pw=pallet.L*s2,ph=pallet.W*s2,bw=fs.floorL*s2,bh=fs.floorW*s2;
+  const s2=58/Math.max(pallet.L,pallet.W),pw=pallet.L*s2,ph=pallet.W*s2,bw=fs.floorL*s2,bh=fs.floorW*s2;
   return(
     <div style={{background:"#fff",border:"1.5px solid #E5E7EB",borderRadius:"12px",padding:"16px",position:"relative"}}>
       <div style={{position:"absolute",top:"12px",right:"12px",background:accent,color:"#fff",borderRadius:"20px",padding:"3px 10px",fontSize:"11px",fontWeight:700}}>{g.count} pallet{g.count!==1?"s":""}</div>
       <div style={{fontSize:"11px",fontWeight:600,color:"#374151",marginBottom:"2px"}}>Pallet{g.palletNos.length>1?"s":""} {g.palletNos.join(", ")}</div>
-      {/* Segment legend */}
       <div style={{marginBottom:"10px"}}>
         {g.segs.map((seg,si)=>(
           <div key={si} style={{display:"flex",alignItems:"center",gap:"5px",marginBottom:"2px"}}>
             <div style={{width:"9px",height:"9px",borderRadius:"2px",background:SEG_CLRS[si%SEG_CLRS.length],flexShrink:0}}/>
-            <span style={{fontSize:"9px",color:"#6B7280"}}>
-              {seg.boxesInSeg} boxes · {seg.layersUsed} layer{seg.layersUsed!==1?"s":""} · {seg.boxH}cm tall · {seg.perLayer}/layer
-            </span>
+            <span style={{fontSize:"9px",color:"#6B7280"}}>{seg.boxesInSeg} boxes · {seg.layersUsed} layer{seg.layersUsed!==1?"s":""} · {seg.boxH}cm tall · {seg.perLayer}/layer</span>
           </div>
         ))}
       </div>
       <div style={{display:"flex",gap:"14px",alignItems:"flex-end"}}>
-        {/* Side elevation */}
         <div style={{position:"relative",height:mPx,width:"80px",flexShrink:0}}>
           <div style={{position:"absolute",left:0,top:0,bottom:0,width:"1px",background:"#E5E7EB"}}/>
-          {/* Max line */}
           <div style={{position:"absolute",top:0,left:0,display:"flex",alignItems:"center",gap:"3px"}}>
             <div style={{width:"5px",height:"1px",background:"#D1D5DB"}}/><span style={{fontSize:"8px",color:"#9CA3AF"}}>{pallet.maxH}cm</span>
           </div>
-          {/* Current height marker */}
           <div style={{position:"absolute",bottom:totalPx,left:0,display:"flex",alignItems:"center",gap:"3px",transform:"translateY(50%)"}}>
             <div style={{width:"5px",height:"1px",background:BC(g.heightPct)}}/><span style={{fontSize:"8px",color:BC(g.heightPct),fontWeight:600}}>{g.totalH.toFixed(1)}cm</span>
           </div>
-          {/* Segments */}
           {segViz.map(({seg,si,bottom,bPx,color})=>
             Array.from({length:seg.layersUsed}).map((_,li)=>(
-              <div key={`${si}-${li}`} style={{
-                position:"absolute",bottom:bottom+li*bPx,left:"12px",right:0,
-                height:Math.max(2,bPx-1),
-                background:li%2===0?color+"28":color+"14",
-                border:`1px solid ${color}66`,
-                display:"flex",alignItems:"center",justifyContent:"center",
-                fontSize:"8px",color:color+"aa",
-              }}>
+              <div key={`${si}-${li}`} style={{position:"absolute",bottom:bottom+li*bPx,left:"12px",right:0,height:Math.max(2,bPx-1),background:li%2===0?color+"28":color+"14",border:`1px solid ${color}66`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:"8px",color:color+"aa"}}>
                 {li===0?`${seg.perLayer}×`:""}
               </div>
             ))
           )}
-          {/* Segment boundary lines */}
           {segViz.slice(1).map(({bottom},si)=>(
-            <div key={si} style={{position:"absolute",bottom,left:"12px",right:0,borderTop:`2px dashed #9CA3AF`,zIndex:2}}/>
+            <div key={si} style={{position:"absolute",bottom,left:"12px",right:0,borderTop:"2px dashed #9CA3AF",zIndex:2}}/>
           ))}
           <div style={{position:"absolute",top:0,left:"12px",right:0,borderTop:"1.5px dashed #E5E7EB"}}/>
-          {/* Pallet base */}
           <div style={{position:"absolute",bottom:0,left:"12px",right:0,height:plPx,background:"repeating-linear-gradient(90deg,#FEF3C7 0,#FEF3C7 5px,#FDE68A 5px,#FDE68A 8px)",border:"1px solid #F59E0B66",borderRadius:"2px 2px 0 0"}}/>
         </div>
-        {/* Stats + top view */}
         <div style={{flex:1}}>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"6px",marginBottom:"10px"}}>
-            {[["Total Boxes",g.boxes],["Total Height",g.totalH.toFixed(1)+"cm"],["Pallets",g.count],["H Used",g.heightPct.toFixed(0)+"%"]].map(([l,v])=>(
+            {[["Total Boxes",g.boxes],["Total H",g.totalH.toFixed(1)+"cm"],["Pallets",g.count],["H Used",g.heightPct.toFixed(0)+"%"]].map(([l,v])=>(
               <div key={l} style={{background:"#F9FAFB",borderRadius:"7px",padding:"8px 10px"}}>
                 <div style={{fontSize:"8px",fontWeight:600,color:"#9CA3AF",marginBottom:"2px"}}>{l}</div>
                 <div style={{fontSize:"15px",fontWeight:800,color:accent}}>{v}</div>
               </div>
             ))}
           </div>
-          {/* Height bar */}
           <div style={{marginBottom:"10px"}}>
             <div style={{display:"flex",justifyContent:"space-between",fontSize:"9px",color:"#9CA3AF",marginBottom:"3px"}}>
               <span>Height utilisation</span><span style={{fontWeight:700,color:BC(g.heightPct)}}>{g.heightPct.toFixed(1)}%</span>
@@ -267,7 +346,6 @@ function PalletCard({g,pallet,accent}){
               <div style={{height:"100%",width:Math.min(100,g.heightPct)+"%",background:BC(g.heightPct),borderRadius:"3px"}}/>
             </div>
           </div>
-          {/* Top-down view (primary layer) */}
           <div>
             <div style={{fontSize:"8px",fontWeight:600,color:"#9CA3AF",marginBottom:"4px"}}>TOP VIEW — Layer 1 ({fs.perLayer}/layer)</div>
             <div style={{position:"relative",width:pw,height:ph,border:"1px solid #E5E7EB",background:"#F9FAFB",borderRadius:"3px",overflow:"hidden"}}>
@@ -287,8 +365,7 @@ function BoxIll({r,pallet,i}){
   const accent=VC[i%VC.length];
   const groups=[];
   r.palletDetails.forEach(pd=>{
-    // Group key = exact segment structure
-    const key=pd.segs.map(s=>`${s.layersUsed}L@${s.boxH}H=${s.boxesInSeg}B`).join('|');
+    const key=pd.segs.map(s=>`${s.layersUsed}@${s.boxH}=${s.boxesInSeg}`).join("|");
     const ex=groups.find(g=>g.key===key);
     if(ex){ex.count++;ex.palletNos.push(pd.palletNo);}
     else groups.push({key,count:1,palletNos:[pd.palletNo],boxes:pd.boxes,segs:pd.segs,totalH:pd.totalH,heightPct:pd.heightPct});
@@ -299,7 +376,7 @@ function BoxIll({r,pallet,i}){
         <div style={{width:"11px",height:"11px",borderRadius:"2px",background:accent}}/>
         <span style={{fontSize:"13px",fontWeight:700,color:"#111827"}}>{r.name||`Box ${i+1}`}</span>
         <span style={{fontSize:"11px",color:"#9CA3AF"}}>{r.qty} boxes · {r.palletsNeeded} pallet{r.palletsNeeded!==1?"s":""}</span>
-        {r.isMixed&&<span style={{fontSize:"10px",fontWeight:600,padding:"2px 8px",borderRadius:"4px",background:"#ECFDF5",color:"#059669",border:"1px solid #A7F3D0"}}>↕ Mixed-orientation stack</span>}
+        {r.isMixed&&<span style={{fontSize:"10px",fontWeight:600,padding:"2px 8px",borderRadius:"4px",background:"#ECFDF5",color:"#059669",border:"1px solid #A7F3D0"}}>↕ Mixed-orientation</span>}
         <span style={{fontSize:"10px",color:"#6B7280"}}>Plan: {r.planLabel} = {r.maxPerPallet}/pallet</span>
       </div>
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(300px,1fr))",gap:"12px"}}>
@@ -309,209 +386,261 @@ function BoxIll({r,pallet,i}){
   );
 }
 
+// ── MAIN APP ──────────────────────────────────────────────────────────────────
 function App(){
   const[pid,setPid]=useState("uk_single");
   const[boxes,setBoxes]=useState([mkBox()]);
   const[show,setShow]=useState(false);
+  const[inputMode,setInputMode]=useState("manual"); // "manual" | "excel"
+
   const pl=PS[pid];
   const res=useMemo(()=>show?boxes.map(b=>calcRow(pl,b)).filter(Boolean):[],[show,pl,boxes]);
   const totPl=res.reduce((s,r)=>s+(r.palletsNeeded||0),0);
   const totBx=boxes.reduce((s,b)=>s+(parseInt(b.qty)||0),0);
   const totWt=res.reduce((s,r)=>s+r.totalWt,0);
   const warn=res.some(r=>!r.fitsFootprint||!r.fitsHeight);
+
   const upd=(id,f,v)=>{setBoxes(p=>p.map(b=>b.id===id?{...b,[f]:v}:b));setShow(false);};
 
-  return<div style={{fontFamily:"'Inter',sans-serif",background:"#F8F9FB",minHeight:"100vh",color:"#111827"}}>
-    {/* HEADER */}
-    <div style={{background:"#fff",borderBottom:"1px solid #E5E7EB",padding:"0 32px",display:"flex",alignItems:"center",height:"60px",gap:"14px",position:"sticky",top:0,zIndex:10}}>
-      <div style={{width:"4px",height:"36px",background:"#2563EB",borderRadius:"2px"}}/>
-      <div>
-        <div style={{fontFamily:"'Syne',sans-serif",fontSize:"18px",fontWeight:800,color:"#111827",lineHeight:1}}>Pallet Calculator</div>
-        <div style={{fontSize:"11px",color:"#9CA3AF",letterSpacing:".3px"}}>AMAZON FBA · LTL SHIPMENTS · MIXED-ORIENTATION STACKING</div>
+  const onExcelBoxes=useCallback(imported=>{
+    setBoxes(imported);setShow(false);setInputMode("manual");
+  },[]);
+
+  return(
+    <div style={{fontFamily:"'Inter',sans-serif",background:"#F8F9FB",minHeight:"100vh",color:"#111827"}}>
+      {/* HEADER */}
+      <div style={{background:"#fff",borderBottom:"1px solid #E5E7EB",padding:"0 32px",display:"flex",alignItems:"center",height:"60px",gap:"14px",position:"sticky",top:0,zIndex:10}}>
+        <div style={{width:"4px",height:"36px",background:"#2563EB",borderRadius:"2px"}}/>
+        <div>
+          <div style={{fontFamily:"'Syne',sans-serif",fontSize:"18px",fontWeight:800,color:"#111827",lineHeight:1}}>Pallet Calculator</div>
+          <div style={{fontSize:"11px",color:"#9CA3AF",letterSpacing:".3px"}}>AMAZON FBA · LTL SHIPMENTS · MIXED-ORIENTATION STACKING</div>
+        </div>
+      </div>
+
+      <div style={{maxWidth:"1280px",margin:"0 auto",padding:"32px 24px"}}>
+
+        {/* ── STEP 1 — PALLET ── */}
+        <Sec n="1" title="Select Pallet Type & Stacking Mode">
+          {[{k:"US",label:"🇺🇸 United States"},{k:"EU",label:"🇪🇺 European Union"},{k:"UK",label:"🇬🇧 United Kingdom"}].map(reg=>(
+            <div key={reg.k} style={{marginBottom:"14px"}}>
+              <div style={{fontSize:"11px",fontWeight:600,color:"#6B7280",marginBottom:"7px",letterSpacing:".4px"}}>{reg.label}</div>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(210px,1fr))",gap:"7px"}}>
+                {Object.values(PS).filter(p=>p.region===reg.k).map(p=>{
+                  const sel=pid===p.id;
+                  return<div key={p.id} className={`pc${sel?" sel":""}`}
+                    onClick={()=>{setPid(p.id);setShow(false);}}
+                    style={{background:sel?p.bg:"#fff",border:`1.5px solid ${sel?p.color:"#E5E7EB"}`,borderRadius:"10px",padding:"12px 14px",color:p.color,display:"flex",justifyContent:"space-between",alignItems:"flex-start",cursor:"pointer"}}>
+                    <div>
+                      <div style={{display:"flex",alignItems:"center",gap:"6px",marginBottom:"4px",flexWrap:"wrap"}}>
+                        <span style={{fontSize:"12px",fontWeight:700,color:"#111827"}}>{p.dims}</span>
+                        <span style={{fontSize:"9px",fontWeight:600,padding:"2px 6px",borderRadius:"4px",background:p.bg,color:p.color,border:`1px solid ${p.border}`,whiteSpace:"nowrap"}}>{p.stackMode==="single"?"Single":"Double"}</span>
+                      </div>
+                      <div style={{fontSize:"10px",color:"#6B7280"}}>{p.stackNote}</div>
+                      <div style={{fontSize:"10px",color:"#9CA3AF",marginTop:"2px"}}>≤ {p.maxWeight} kg</div>
+                    </div>
+                    <div style={{width:"15px",height:"15px",borderRadius:"50%",border:`2px solid ${sel?p.color:"#D1D5DB"}`,background:sel?p.color:"#fff",flexShrink:0,marginTop:"2px",display:"flex",alignItems:"center",justifyContent:"center"}}>
+                      {sel&&<div style={{width:"5px",height:"5px",background:"#fff",borderRadius:"50%"}}/>}
+                    </div>
+                  </div>;
+                })}
+              </div>
+            </div>
+          ))}
+          <div style={{background:"#fff",border:`1px solid ${pl.border}`,borderLeft:`4px solid ${pl.color}`,borderRadius:"8px",padding:"13px 18px",display:"flex",gap:"26px",flexWrap:"wrap",marginTop:"6px"}}>
+            {[["Footprint",`${pl.L}×${pl.W} cm`],["Pallet H",`${pl.palletH} cm`],["Usable Stack",`${(pl.maxH-pl.palletH).toFixed(0)} cm`],["Max Total H",`${pl.maxH} cm`],["Max Weight",`${pl.maxWeight} kg / ${(pl.maxWeight*2.205).toFixed(0)} lbs`]].map(([l,v])=>(
+              <div key={l}><div style={{fontSize:"10px",color:"#9CA3AF",marginBottom:"2px"}}>{l}</div><div style={{fontSize:"14px",fontWeight:700,color:pl.color}}>{v}</div></div>
+            ))}
+          </div>
+          {pl.doubleNote&&<div style={{marginTop:"8px",background:"#FFFBEB",border:"1px solid #FDE68A",borderLeft:"4px solid #F59E0B",borderRadius:"8px",padding:"9px 14px",fontSize:"12px",color:"#92400E"}}><strong>ℹ Double Stack — </strong>{pl.doubleNote}</div>}
+        </Sec>
+
+        {/* ── STEP 2 — BOX INPUT ── */}
+        <Sec n="2" title="Box Dimensions & Quantities"
+          action={
+            inputMode==="manual"
+              ? <button className="add-btn" onClick={()=>setBoxes(p=>[...p,mkBox()])} style={{background:"#fff",border:"1.5px solid #D1D5DB",color:"#374151",padding:"7px 14px",borderRadius:"7px",fontSize:"12px",fontWeight:600,cursor:"pointer",transition:"all .15s"}}>+ Add Box Type</button>
+              : null
+          }>
+
+          {/* Mode tabs */}
+          <div style={{display:"flex",gap:"0",background:"#F3F4F6",borderRadius:"8px",padding:"3px",marginBottom:"18px",width:"fit-content"}}>
+            {[["manual","✏️  Enter manually"],["excel","📊  Upload Excel"]].map(([mode,label])=>(
+              <button key={mode} className="tab-btn"
+                onClick={()=>{setInputMode(mode);setShow(false);}}
+                style={{padding:"7px 18px",borderRadius:"6px",border:"none",background:inputMode===mode?"#fff":"transparent",color:inputMode===mode?"#111827":"#6B7280",fontWeight:inputMode===mode?700:500,fontSize:"12px",cursor:"pointer",boxShadow:inputMode===mode?"0 1px 4px rgba(0,0,0,.08)":"none"}}>
+                {label}
+              </button>
+            ))}
+          </div>
+
+          {inputMode==="excel"
+            ? <UploadZone onBoxes={onExcelBoxes}/>
+            : (
+              <>
+                {/* Global rotation */}
+                <div style={{display:"flex",alignItems:"center",gap:"14px",background:"#F9FAFB",border:"1px solid #E5E7EB",borderRadius:"8px",padding:"9px 14px",marginBottom:"12px",flexWrap:"wrap"}}>
+                  <span style={{fontSize:"12px",fontWeight:600,color:"#374151"}}>Rotation for all:</span>
+                  <button onClick={()=>{setBoxes(p=>p.map(b=>({...b,rotate:true})));setShow(false);}} style={{padding:"5px 12px",borderRadius:"6px",border:"1.5px solid #BBF7D0",background:"#F0FDF4",color:"#15803D",fontSize:"11px",fontWeight:700,cursor:"pointer"}}>↻ Allow All</button>
+                  <button onClick={()=>{setBoxes(p=>p.map(b=>({...b,rotate:false})));setShow(false);}} style={{padding:"5px 12px",borderRadius:"6px",border:"1.5px solid #FED7AA",background:"#FFF7ED",color:"#C2410C",fontSize:"11px",fontWeight:700,cursor:"pointer"}}>⊘ Fix All</button>
+                  <span style={{fontSize:"11px",color:"#9CA3AF"}}>Override per row below</span>
+                </div>
+                <div style={{overflowX:"auto"}}>
+                  <div style={{minWidth:"860px"}}>
+                    <div style={{display:"grid",gridTemplateColumns:"1.5fr 72px 1fr 1fr 1fr 0.8fr 0.8fr 68px 100px 32px",gap:"6px",padding:"5px 10px",marginBottom:"2px"}}>
+                      {["Name / SKU","Dim Unit","Length","Width","Height","Qty","Weight","Wt Unit","Rotation",""].map(h=><div key={h} style={{fontSize:"10px",fontWeight:600,color:"#9CA3AF",letterSpacing:".3px"}}>{h}</div>)}
+                    </div>
+                    <div style={{display:"flex",flexDirection:"column",gap:"5px"}}>
+                      {boxes.map((box,idx)=>(
+                        <div key={box.id} style={{display:"grid",gridTemplateColumns:"1.5fr 72px 1fr 1fr 1fr 0.8fr 0.8fr 68px 100px 32px",gap:"6px",background:"#fff",border:"1.5px solid #E5E7EB",borderRadius:"9px",padding:"9px 10px",alignItems:"center"}}>
+                          <input value={box.name} onChange={e=>upd(box.id,"name",e.target.value)} placeholder={`Box ${idx+1}`} style={{border:"1.5px solid #E5E7EB",borderRadius:"6px",padding:"7px 9px",fontSize:"11px",color:"#374151",background:"#FAFAFA",width:"100%"}}/>
+                          <div style={{display:"flex",border:"1.5px solid #E5E7EB",borderRadius:"6px",overflow:"hidden",height:"34px"}}>
+                            {["cm","in"].map(u=><button key={u} onClick={()=>upd(box.id,"unit",u)} style={{flex:1,background:box.unit===u?"#2563EB":"#FAFAFA",color:box.unit===u?"#fff":"#9CA3AF",border:"none",cursor:"pointer",fontSize:"11px",fontWeight:700,transition:"background .15s"}}>{u}</button>)}
+                          </div>
+                          {["l","w","h"].map(dim=><input key={dim} type="number" value={box[dim]} onChange={e=>upd(box.id,dim,e.target.value)} placeholder="0" min="0" step="0.1" style={{border:"1.5px solid #E5E7EB",borderRadius:"6px",padding:"7px 9px",fontSize:"13px",fontWeight:600,color:"#1D4ED8",textAlign:"right",background:"#FAFAFA",width:"100%"}}/>)}
+                          <input type="number" value={box.qty} onChange={e=>upd(box.id,"qty",e.target.value)} placeholder="0" min="1" style={{border:"1.5px solid #E5E7EB",borderRadius:"6px",padding:"7px 9px",fontSize:"13px",fontWeight:600,color:"#0369A1",textAlign:"right",background:"#FAFAFA",width:"100%"}}/>
+                          <input type="number" value={box.wt} onChange={e=>upd(box.id,"wt",e.target.value)} placeholder="0.0" min="0" step="0.01" style={{border:"1.5px solid #E5E7EB",borderRadius:"6px",padding:"7px 9px",fontSize:"13px",color:"#6B7280",textAlign:"right",background:"#FAFAFA",width:"100%"}}/>
+                          {/* Weight unit toggle */}
+                          <div style={{display:"flex",border:"1.5px solid #E5E7EB",borderRadius:"6px",overflow:"hidden",height:"34px"}}>
+                            {["kg","lbs"].map(u=><button key={u} onClick={()=>upd(box.id,"wtUnit",u)} style={{flex:1,background:(box.wtUnit||"kg")===u?"#7C3AED":"#FAFAFA",color:(box.wtUnit||"kg")===u?"#fff":"#9CA3AF",border:"none",cursor:"pointer",fontSize:"10px",fontWeight:700,transition:"background .15s"}}>{u}</button>)}
+                          </div>
+                          <Toggle v={box.rotate} onChange={v=>upd(box.id,"rotate",v)}/>
+                          {boxes.length>1
+                            ? <button className="del-btn" onClick={()=>{setBoxes(p=>p.filter(b=>b.id!==box.id));setShow(false);}} style={{width:"30px",height:"30px",border:"1.5px solid #E5E7EB",borderRadius:"6px",background:"#fff",color:"#9CA3AF",cursor:"pointer",fontSize:"15px",display:"flex",alignItems:"center",justifyContent:"center",transition:"all .15s"}}>&times;</button>
+                            : <div/>}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+                <div style={{marginTop:"8px",fontSize:"11px",color:"#9CA3AF",padding:"0 4px",lineHeight:1.7}}>
+                  <strong style={{color:"#15803D"}}>Rotation ON:</strong> all 3 box orientations + mixed-layer stacking. &nbsp;<strong style={{color:"#C2410C"}}>OFF:</strong> strict L×W×H only.
+                </div>
+              </>
+            )
+          }
+
+          {/* Loaded from Excel summary */}
+          {inputMode==="manual"&&boxes.length>0&&boxes[0].name&&(
+            <div style={{marginTop:"12px",padding:"8px 12px",background:"#F0FDF4",border:"1px solid #BBF7D0",borderRadius:"7px",fontSize:"11px",color:"#15803D",display:"flex",alignItems:"center",gap:"8px"}}>
+              <span>✓</span>
+              <span><strong>{boxes.length} box type{boxes.length!==1?"s":""}</strong> loaded · {totBx.toLocaleString()} total units</span>
+              <button onClick={()=>setBoxes([mkBox()])} style={{marginLeft:"auto",background:"none",border:"none",color:"#9CA3AF",cursor:"pointer",fontSize:"11px",textDecoration:"underline"}}>Clear all</button>
+            </div>
+          )}
+        </Sec>
+
+        {/* ── CALCULATE ── */}
+        <button className="calc-btn" onClick={()=>setShow(true)}
+          style={{width:"100%",background:"#2563EB",color:"#fff",border:"none",padding:"16px",borderRadius:"10px",fontSize:"15px",fontWeight:700,cursor:"pointer",marginBottom:"40px",letterSpacing:".3px",transition:"all .2s"}}>
+          Calculate Pallets →
+        </button>
+
+        {/* ── RESULTS ── */}
+        {show&&res.length>0&&(
+          <div className="fade-up">
+            <Sec n="3" title="Results">
+              {/* KPI cards */}
+              <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:"12px",marginBottom:"28px"}}>
+                {[
+                  {l:"Pallets Needed",v:totPl,s:pl.label,c:pl.color,bg:pl.bg},
+                  {l:"Total Boxes",v:totBx.toLocaleString(),s:"units shipped",c:"#0369A1",bg:"#F0F9FF"},
+                  {l:"Total Weight",v:totWt.toFixed(1)+" kg",s:`${(totWt/LB2KG).toFixed(1)} lbs`,c:"#7C3AED",bg:"#F5F3FF",warn:totWt>pl.maxWeight*totPl},
+                  {l:"Status",v:warn?"⚠ Check":"✓ Clear",s:warn?"Review warnings":"All dims fit",c:warn?"#EF4444":"#16A34A",bg:warn?"#FEF2F2":"#F0FDF4"},
+                ].map(k=>(
+                  <div key={k.l} style={{background:k.bg,border:`1.5px solid ${k.c}33`,borderTop:`4px solid ${k.c}`,borderRadius:"10px",padding:"18px"}}>
+                    <div style={{fontSize:"11px",fontWeight:600,color:"#6B7280",marginBottom:"8px"}}>{k.l}</div>
+                    <div style={{fontSize:"28px",fontWeight:800,color:k.c,lineHeight:1,fontFamily:"'Syne',sans-serif"}}>{k.v}</div>
+                    <div style={{fontSize:"11px",color:"#9CA3AF",marginTop:"5px"}}>{k.s}</div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Breakdown table */}
+              <div style={{background:"#fff",border:"1.5px solid #E5E7EB",borderRadius:"10px",overflow:"hidden",marginBottom:"28px"}}>
+                <div style={{padding:"12px 18px",borderBottom:"1px solid #F3F4F6",display:"flex",alignItems:"center",gap:"12px"}}>
+                  <span style={{fontSize:"12px",fontWeight:700,color:"#374151"}}>Detailed Breakdown</span>
+                  <span style={{fontSize:"10px",color:"#9CA3AF"}}>Stack Plan = boxes-per-layer × layers per orientation group</span>
+                </div>
+                <div style={{overflowX:"auto"}}>
+                  <table style={{width:"100%",borderCollapse:"collapse",fontSize:"12px"}}>
+                    <thead>
+                      <tr style={{background:"#F9FAFB",borderBottom:"1px solid #E5E7EB"}}>
+                        {["Box","Dimensions","Dim Unit","Stack Plan","Max/Pallet","Pallets","Last Pallet H","Wt/box","Total Wt","Status"].map(h=>(
+                          <th key={h} style={{padding:"10px 13px",textAlign:"left",fontSize:"10px",fontWeight:600,color:"#6B7280",whiteSpace:"nowrap"}}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {res.map((r,i)=>{
+                        const st=ST(r);
+                        const last=r.palletDetails[r.palletDetails.length-1];
+                        return(
+                          <tr key={r.id} style={{borderBottom:"1px solid #F3F4F6"}}>
+                            <td style={{padding:"12px 13px",fontWeight:600,color:"#111827"}}>{r.name||`Box ${i+1}`}</td>
+                            <td style={{padding:"12px 13px",color:"#1D4ED8",fontWeight:600,whiteSpace:"nowrap",fontSize:"11px"}}>
+                              {r.unit==="in"?`${(r.L/IN2CM).toFixed(1)}"×${(r.W/IN2CM).toFixed(1)}"×${(r.H/IN2CM).toFixed(1)}"` :`${r.L.toFixed(0)}×${r.W.toFixed(0)}×${r.H.toFixed(0)} cm`}
+                            </td>
+                            <td style={{padding:"12px 13px"}}>
+                              <span style={{fontSize:"10px",fontWeight:700,padding:"2px 7px",borderRadius:"4px",background:r.unit==="cm"?"#EFF6FF":"#FFF7ED",color:r.unit==="cm"?"#1D4ED8":"#C2410C",border:`1px solid ${r.unit==="cm"?"#BFDBFE":"#FED7AA"}`}}>{r.unit}</span>
+                            </td>
+                            <td style={{padding:"12px 13px"}}>
+                              <div style={{display:"flex",alignItems:"center",gap:"5px",flexWrap:"wrap"}}>
+                                <span style={{fontFamily:"'Syne',sans-serif",fontSize:"13px",fontWeight:700,color:"#111827"}}>{r.planLabel}</span>
+                                <span style={{fontSize:"10px",color:"#9CA3AF"}}>= {r.maxPerPallet}/plt</span>
+                                {r.isMixed&&<span style={{fontSize:"9px",fontWeight:600,padding:"1px 6px",borderRadius:"3px",background:"#ECFDF5",color:"#059669",border:"1px solid #A7F3D0"}}>↕ mixed</span>}
+                              </div>
+                            </td>
+                            <td style={{padding:"12px 13px",color:"#374151",fontWeight:600}}>{r.maxPerPallet||"—"}</td>
+                            <td style={{padding:"12px 13px"}}>
+                              <span style={{fontFamily:"'Syne',sans-serif",fontSize:"22px",fontWeight:800,color:pl.color}}>{r.palletsNeeded??"-"}</span>
+                            </td>
+                            <td style={{padding:"12px 13px",minWidth:"130px"}}>
+                              <div style={{color:BC(last?.heightPct||0),fontSize:"11px",fontWeight:600,marginBottom:"4px"}}>{last?.totalH.toFixed(1)} cm <span style={{color:"#9CA3AF",fontWeight:400}}>/ {pl.maxH} cm</span></div>
+                              <div style={{height:"4px",background:"#F3F4F6",borderRadius:"2px",overflow:"hidden"}}>
+                                <div style={{height:"100%",width:Math.min(100,last?.heightPct||0)+"%",background:BC(last?.heightPct||0)}}/>
+                              </div>
+                              <div style={{fontSize:"9px",color:"#9CA3AF",marginTop:"2px"}}>{(last?.heightPct||0).toFixed(1)}%</div>
+                            </td>
+                            <td style={{padding:"12px 13px",color:r.totalWt>pl.maxWeight*(r.palletsNeeded||1)?"#EF4444":"#6B7280",fontWeight:r.wt?600:400,whiteSpace:"nowrap"}}>
+                              {r.wt?<>{fmtWt(r.wtKg,r.wtUnit||"kg")}</>:"—"}
+                            </td>
+                            <td style={{padding:"12px 13px",whiteSpace:"nowrap"}}>
+                              {r.totalWt>0
+                                ?<><span style={{fontWeight:600,color:r.totalWt>pl.maxWeight*(r.palletsNeeded||1)?"#EF4444":"#374151"}}>{r.totalWt.toFixed(1)} kg</span><span style={{fontSize:"10px",color:"#9CA3AF",marginLeft:"4px"}}>/ {(r.totalWt/LB2KG).toFixed(1)} lbs</span></>
+                                :"—"}
+                            </td>
+                            <td style={{padding:"12px 13px"}}>
+                              <span style={{fontSize:"10px",fontWeight:700,padding:"3px 9px",borderRadius:"5px",background:st.bg,color:st.c,whiteSpace:"nowrap"}}>{st.l}</span>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* Illustrations */}
+              <div style={{fontSize:"14px",fontWeight:700,color:"#111827",marginBottom:"14px"}}>
+                Pallet Illustrations
+                <span style={{fontSize:"11px",fontWeight:400,color:"#9CA3AF",marginLeft:"10px"}}>Identical layouts grouped · dashed lines = orientation change</span>
+              </div>
+              {res.map((r,i)=>r.palletsNeeded&&r.fitsFootprint&&r.fitsHeight?<BoxIll key={r.id} r={r} pallet={pl} i={i}/>:null)}
+
+              {/* Disclaimer */}
+              <div style={{background:"#F9FAFB",border:"1px solid #E5E7EB",borderRadius:"8px",padding:"13px 18px",fontSize:"11px",color:"#9CA3AF",lineHeight:1.8,marginTop:"8px"}}>
+                <strong style={{color:"#6B7280"}}>Stacking logic: </strong>
+                With rotation enabled, all 3 box faces are tried as height + every 2-phase mixed combination to maximise boxes per pallet.
+                <br/><strong style={{color:"#6B7280"}}>Sources: </strong>
+                US 72"/100" — Amazon SC US. EU 180/270/300 cm — Amazon SC EU. UK 180/300 cm — Amazon SC UK &amp; Palletline IPCP. Always verify in Seller Central before shipping.
+              </div>
+            </Sec>
+          </div>
+        )}
+        {show&&res.length===0&&<div style={{textAlign:"center",padding:"40px",color:"#D1D5DB",fontSize:"13px"}}>Fill in at least one complete box row to see results.</div>}
       </div>
     </div>
-
-    <div style={{maxWidth:"1280px",margin:"0 auto",padding:"32px 24px"}}>
-
-      {/* STEP 1 */}
-      <Sec n="1" title="Select Pallet Type & Stacking Mode">
-        {[{k:"US",f:"🇺🇸"},{k:"EU",f:"🇪🇺"},{k:"UK",f:"🇬🇧"}].map(reg=>(
-          <div key={reg.k} style={{marginBottom:"14px"}}>
-            <div style={{fontSize:"11px",fontWeight:600,color:"#6B7280",marginBottom:"7px",letterSpacing:".4px"}}>{reg.f} {reg.k==="US"?"United States":reg.k==="EU"?"European Union":"United Kingdom"}</div>
-            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(210px,1fr))",gap:"7px"}}>
-              {Object.values(PS).filter(p=>p.region===reg.k).map(p=>{
-                const sel=pid===p.id;
-                return<div key={p.id} className={`pc${sel?" sel":""}`}
-                  onClick={()=>{setPid(p.id);setShow(false);}}
-                  style={{background:sel?p.bg:"#fff",border:`1.5px solid ${sel?p.color:"#E5E7EB"}`,borderRadius:"10px",padding:"12px 14px",color:p.color,display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
-                  <div>
-                    <div style={{display:"flex",alignItems:"center",gap:"6px",marginBottom:"4px",flexWrap:"wrap"}}>
-                      <span style={{fontSize:"12px",fontWeight:700,color:"#111827"}}>{p.dims}</span>
-                      <span style={{fontSize:"9px",fontWeight:600,padding:"2px 6px",borderRadius:"4px",background:p.bg,color:p.color,border:`1px solid ${p.border}`,whiteSpace:"nowrap"}}>{p.stackMode==="single"?"Single":"Double"}</span>
-                    </div>
-                    <div style={{fontSize:"10px",color:"#6B7280"}}>{p.stackNote}</div>
-                    <div style={{fontSize:"10px",color:"#9CA3AF",marginTop:"2px"}}>≤ {p.maxWeight} kg</div>
-                  </div>
-                  <div style={{width:"15px",height:"15px",borderRadius:"50%",border:`2px solid ${sel?p.color:"#D1D5DB"}`,background:sel?p.color:"#fff",flexShrink:0,marginTop:"2px",display:"flex",alignItems:"center",justifyContent:"center"}}>
-                    {sel&&<div style={{width:"5px",height:"5px",background:"#fff",borderRadius:"50%"}}/>}
-                  </div>
-                </div>;
-              })}
-            </div>
-          </div>
-        ))}
-        <div style={{background:"#fff",border:`1px solid ${pl.border}`,borderLeft:`4px solid ${pl.color}`,borderRadius:"8px",padding:"13px 18px",display:"flex",gap:"26px",flexWrap:"wrap",marginTop:"6px"}}>
-          {[["Footprint",`${pl.L}×${pl.W} cm`],["Pallet H",`${pl.palletH} cm`],["Usable Stack",`${(pl.maxH-pl.palletH).toFixed(0)} cm`],["Max Total H",`${pl.maxH} cm`],["Max Weight",`${pl.maxWeight} kg / ${(pl.maxWeight*2.205).toFixed(0)} lbs`]].map(([l,v])=>(
-            <div key={l}><div style={{fontSize:"10px",color:"#9CA3AF",marginBottom:"2px"}}>{l}</div><div style={{fontSize:"14px",fontWeight:700,color:pl.color}}>{v}</div></div>
-          ))}
-        </div>
-        {pl.doubleNote&&<div style={{marginTop:"8px",background:"#FFFBEB",border:"1px solid #FDE68A",borderLeft:"4px solid #F59E0B",borderRadius:"8px",padding:"9px 14px",fontSize:"12px",color:"#92400E"}}><strong>ℹ Double Stack — </strong>{pl.doubleNote}</div>}
-      </Sec>
-
-      {/* STEP 2 */}
-      <Sec n="2" title="Box Dimensions & Quantities" action={
-        <button className="add-btn" onClick={()=>setBoxes(p=>[...p,mkBox()])} style={{background:"#fff",border:"1.5px solid #D1D5DB",color:"#374151",padding:"7px 14px",borderRadius:"7px",fontSize:"12px",fontWeight:600,cursor:"pointer",transition:"all .15s"}}>+ Add Box Type</button>
-      }>
-        <div style={{display:"flex",alignItems:"center",gap:"14px",background:"#F9FAFB",border:"1px solid #E5E7EB",borderRadius:"8px",padding:"9px 14px",marginBottom:"12px",flexWrap:"wrap"}}>
-          <span style={{fontSize:"12px",fontWeight:600,color:"#374151"}}>Rotation for all:</span>
-          <button onClick={()=>{setBoxes(p=>p.map(b=>({...b,rotate:true})));setShow(false);}} style={{padding:"5px 12px",borderRadius:"6px",border:"1.5px solid #BBF7D0",background:"#F0FDF4",color:"#15803D",fontSize:"11px",fontWeight:700,cursor:"pointer"}}>↻ Allow All</button>
-          <button onClick={()=>{setBoxes(p=>p.map(b=>({...b,rotate:false})));setShow(false);}} style={{padding:"5px 12px",borderRadius:"6px",border:"1.5px solid #FED7AA",background:"#FFF7ED",color:"#C2410C",fontSize:"11px",fontWeight:700,cursor:"pointer"}}>⊘ Fix All</button>
-          <span style={{fontSize:"11px",color:"#9CA3AF"}}>Override per row below</span>
-        </div>
-        <div style={{overflowX:"auto"}}>
-          <div style={{minWidth:"740px"}}>
-            <div style={{display:"grid",gridTemplateColumns:"1.5fr 72px 1fr 1fr 1fr 0.8fr 0.8fr 100px 32px",gap:"6px",padding:"5px 10px",marginBottom:"2px"}}>
-              {["Name / SKU","Unit","Length","Width","Height","Qty","kg/box","Rotation",""].map(h=><div key={h} style={{fontSize:"10px",fontWeight:600,color:"#9CA3AF",letterSpacing:".3px"}}>{h}</div>)}
-            </div>
-            <div style={{display:"flex",flexDirection:"column",gap:"5px"}}>
-              {boxes.map((box,idx)=>(
-                <div key={box.id} style={{display:"grid",gridTemplateColumns:"1.5fr 72px 1fr 1fr 1fr 0.8fr 0.8fr 100px 32px",gap:"6px",background:"#fff",border:"1.5px solid #E5E7EB",borderRadius:"9px",padding:"9px 10px",alignItems:"center"}}>
-                  <input value={box.name} onChange={e=>upd(box.id,"name",e.target.value)} placeholder={`Box ${idx+1}`} style={{border:"1.5px solid #E5E7EB",borderRadius:"6px",padding:"7px 9px",fontSize:"11px",color:"#374151",background:"#FAFAFA",width:"100%"}}/>
-                  <div style={{display:"flex",border:"1.5px solid #E5E7EB",borderRadius:"6px",overflow:"hidden",height:"34px"}}>
-                    {["cm","in"].map(u=><button key={u} onClick={()=>upd(box.id,"unit",u)} style={{flex:1,background:box.unit===u?"#2563EB":"#FAFAFA",color:box.unit===u?"#fff":"#9CA3AF",border:"none",cursor:"pointer",fontSize:"11px",fontWeight:700,transition:"background .15s"}}>{u}</button>)}
-                  </div>
-                  {["l","w","h"].map(dim=><input key={dim} type="number" value={box[dim]} onChange={e=>upd(box.id,dim,e.target.value)} placeholder="0" min="0" step="0.1" style={{border:"1.5px solid #E5E7EB",borderRadius:"6px",padding:"7px 9px",fontSize:"13px",fontWeight:600,color:"#1D4ED8",textAlign:"right",background:"#FAFAFA",width:"100%"}}/>)}
-                  <input type="number" value={box.qty} onChange={e=>upd(box.id,"qty",e.target.value)} placeholder="0" min="1" style={{border:"1.5px solid #E5E7EB",borderRadius:"6px",padding:"7px 9px",fontSize:"13px",fontWeight:600,color:"#0369A1",textAlign:"right",background:"#FAFAFA",width:"100%"}}/>
-                  <input type="number" value={box.wt} onChange={e=>upd(box.id,"wt",e.target.value)} placeholder="0.0" min="0" step="0.01" style={{border:"1.5px solid #E5E7EB",borderRadius:"6px",padding:"7px 9px",fontSize:"13px",color:"#6B7280",textAlign:"right",background:"#FAFAFA",width:"100%"}}/>
-                  <Toggle v={box.rotate} onChange={v=>upd(box.id,"rotate",v)}/>
-                  {boxes.length>1?<button className="del-btn" onClick={()=>{setBoxes(p=>p.filter(b=>b.id!==box.id));setShow(false);}} style={{width:"30px",height:"30px",border:"1.5px solid #E5E7EB",borderRadius:"6px",background:"#fff",color:"#9CA3AF",cursor:"pointer",fontSize:"15px",display:"flex",alignItems:"center",justifyContent:"center",transition:"all .15s"}}>&times;</button>:<div/>}
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-        <div style={{marginTop:"8px",fontSize:"11px",color:"#9CA3AF",padding:"0 4px",lineHeight:1.7}}>
-          <strong style={{color:"#15803D"}}>Rotation ON:</strong> all 3 box orientations tried (any face can be the height). Calculator also tests mixed-orientation stacking — different layers can use different box faces to maximise pallet use.&nbsp;&nbsp;
-          <strong style={{color:"#C2410C"}}>Rotation OFF:</strong> strict L×W×H only, no mixing.
-        </div>
-      </Sec>
-
-      {/* CALCULATE */}
-      <button className="calc-btn" onClick={()=>setShow(true)} style={{width:"100%",background:"#2563EB",color:"#fff",border:"none",padding:"16px",borderRadius:"10px",fontSize:"15px",fontWeight:700,cursor:"pointer",marginBottom:"40px",letterSpacing:".3px",transition:"all .2s"}}>
-        Calculate Pallets →
-      </button>
-
-      {/* RESULTS */}
-      {show&&res.length>0&&(
-        <div className="fade-up">
-          <Sec n="3" title="Results">
-            {/* KPI cards */}
-            <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:"12px",marginBottom:"28px"}}>
-              {[
-                {l:"Pallets Needed",v:totPl,s:pl.label,c:pl.color,bg:pl.bg},
-                {l:"Total Boxes",v:totBx.toLocaleString(),s:"units shipped",c:"#0369A1",bg:"#F0F9FF"},
-                {l:"Total Weight",v:totWt.toFixed(1)+"kg",s:`${(totWt*2.205).toFixed(0)} lbs`,c:"#7C3AED",bg:"#F5F3FF",warn:totWt>pl.maxWeight*totPl},
-                {l:"Status",v:warn?"⚠ Check":"✓ Clear",s:warn?"Review warnings":"All dims fit",c:warn?"#EF4444":"#16A34A",bg:warn?"#FEF2F2":"#F0FDF4"},
-              ].map(k=>(
-                <div key={k.l} style={{background:k.bg,border:`1.5px solid ${k.c}33`,borderTop:`4px solid ${k.c}`,borderRadius:"10px",padding:"18px"}}>
-                  <div style={{fontSize:"11px",fontWeight:600,color:"#6B7280",marginBottom:"8px"}}>{k.l}</div>
-                  <div style={{fontSize:"28px",fontWeight:800,color:k.c,lineHeight:1,fontFamily:"'Syne',sans-serif"}}>{k.v}</div>
-                  <div style={{fontSize:"11px",color:"#9CA3AF",marginTop:"5px"}}>{k.s}</div>
-                </div>
-              ))}
-            </div>
-
-            {/* Breakdown table */}
-            <div style={{background:"#fff",border:"1.5px solid #E5E7EB",borderRadius:"10px",overflow:"hidden",marginBottom:"28px"}}>
-              <div style={{padding:"12px 18px",borderBottom:"1px solid #F3F4F6",display:"flex",alignItems:"center",gap:"12px"}}>
-                <span style={{fontSize:"12px",fontWeight:700,color:"#374151"}}>Detailed Breakdown</span>
-                <span style={{fontSize:"10px",color:"#9CA3AF"}}>Stack Plan = boxes-per-layer × layers per orientation group</span>
-              </div>
-              <div style={{overflowX:"auto"}}>
-                <table style={{width:"100%",borderCollapse:"collapse",fontSize:"12px"}}>
-                  <thead>
-                    <tr style={{background:"#F9FAFB",borderBottom:"1px solid #E5E7EB"}}>
-                      {["Box","Dimensions","Unit","Stack Plan","Max/Pallet","Pallets","Last Pallet H","Total Wt","Status"].map(h=>(
-                        <th key={h} style={{padding:"10px 13px",textAlign:"left",fontSize:"10px",fontWeight:600,color:"#6B7280",whiteSpace:"nowrap"}}>{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {res.map((r,i)=>{
-                      const st=ST(r);
-                      const lastH=r.palletDetails[r.palletDetails.length-1]?.totalH;
-                      const lastPct=r.palletDetails[r.palletDetails.length-1]?.heightPct||0;
-                      return(
-                        <tr key={r.id} style={{borderBottom:"1px solid #F3F4F6"}}>
-                          <td style={{padding:"12px 13px",fontWeight:600,color:"#111827"}}>{r.name||`Box ${i+1}`}</td>
-                          <td style={{padding:"12px 13px",color:"#1D4ED8",fontWeight:600,whiteSpace:"nowrap",fontSize:"11px"}}>
-                            {r.unit==="in"?`${(r.L/IN2CM).toFixed(1)}"×${(r.W/IN2CM).toFixed(1)}"×${(r.H/IN2CM).toFixed(1)}"` :`${r.L.toFixed(0)}×${r.W.toFixed(0)}×${r.H.toFixed(0)}cm`}
-                          </td>
-                          <td style={{padding:"12px 13px"}}>
-                            <span style={{fontSize:"10px",fontWeight:700,padding:"2px 7px",borderRadius:"4px",background:r.unit==="cm"?"#EFF6FF":"#FFF7ED",color:r.unit==="cm"?"#1D4ED8":"#C2410C",border:`1px solid ${r.unit==="cm"?"#BFDBFE":"#FED7AA"}`}}>{r.unit}</span>
-                          </td>
-                          <td style={{padding:"12px 13px"}}>
-                            <div style={{display:"flex",alignItems:"center",gap:"5px",flexWrap:"wrap"}}>
-                              <span style={{fontFamily:"'Syne',sans-serif",fontSize:"13px",fontWeight:700,color:"#111827"}}>{r.planLabel}</span>
-                              <span style={{fontSize:"10px",color:"#9CA3AF"}}>= {r.maxPerPallet}/plt</span>
-                              {r.isMixed&&<span style={{fontSize:"9px",fontWeight:600,padding:"1px 6px",borderRadius:"3px",background:"#ECFDF5",color:"#059669",border:"1px solid #A7F3D0"}}>↕ mixed</span>}
-                            </div>
-                          </td>
-                          <td style={{padding:"12px 13px",color:"#374151",fontWeight:600}}>{r.maxPerPallet||"—"}</td>
-                          <td style={{padding:"12px 13px"}}>
-                            <span style={{fontFamily:"'Syne',sans-serif",fontSize:"22px",fontWeight:800,color:pl.color}}>{r.palletsNeeded??"-"}</span>
-                          </td>
-                          <td style={{padding:"12px 13px",minWidth:"130px"}}>
-                            <div style={{color:BC(lastPct),fontSize:"11px",fontWeight:600,marginBottom:"4px"}}>{lastH?.toFixed(1)}cm <span style={{color:"#9CA3AF",fontWeight:400}}>/ {pl.maxH}cm</span></div>
-                            <div style={{height:"4px",background:"#F3F4F6",borderRadius:"2px",overflow:"hidden"}}>
-                              <div style={{height:"100%",width:Math.min(100,lastPct)+"%",background:BC(lastPct)}}/>
-                            </div>
-                            <div style={{fontSize:"9px",color:"#9CA3AF",marginTop:"2px"}}>{lastPct.toFixed(1)}%</div>
-                          </td>
-                          <td style={{padding:"12px 13px",color:r.totalWt>pl.maxWeight*(r.palletsNeeded||1)?"#EF4444":"#6B7280",fontWeight:r.totalWt>0?600:400}}>
-                            {r.totalWt>0?r.totalWt.toFixed(1)+" kg":"—"}
-                          </td>
-                          <td style={{padding:"12px 13px"}}>
-                            <span style={{fontSize:"10px",fontWeight:700,padding:"3px 9px",borderRadius:"5px",background:st.bg,color:st.c,whiteSpace:"nowrap"}}>{st.l}</span>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-
-            {/* Illustrations */}
-            <div style={{fontSize:"14px",fontWeight:700,color:"#111827",marginBottom:"14px"}}>
-              Pallet Illustrations
-              <span style={{fontSize:"11px",fontWeight:400,color:"#9CA3AF",marginLeft:"10px"}}>Identical layouts grouped · dashed lines = orientation change</span>
-            </div>
-            {res.map((r,i)=>r.palletsNeeded&&r.fitsFootprint&&r.fitsHeight?<BoxIll key={r.id} r={r} pallet={pl} i={i}/>:null)}
-
-            {/* Disclaimer */}
-            <div style={{background:"#F9FAFB",border:"1px solid #E5E7EB",borderRadius:"8px",padding:"13px 18px",fontSize:"11px",color:"#9CA3AF",lineHeight:1.8,marginTop:"8px"}}>
-              <strong style={{color:"#6B7280"}}>Stacking logic: </strong>
-              When rotation is enabled, the calculator tries all 3 box orientations (each face as height) and all 2-phase combinations where primary layers use one orientation and remaining headroom uses a second orientation — selecting the combination that maximises boxes per pallet.
-              <br/><strong style={{color:"#6B7280"}}>Sources: </strong>
-              US 72"/100" — Amazon SC US. EU 180/270/300cm — Amazon SC EU. UK 180/300cm — Amazon SC UK &amp; Palletline IPCP. Always verify in Seller Central before shipping.
-            </div>
-          </Sec>
-        </div>
-      )}
-      {show&&res.length===0&&<div style={{textAlign:"center",padding:"40px",color:"#D1D5DB",fontSize:"13px"}}>Fill in at least one complete box row to see results.</div>}
-    </div>
-  </div>;
+  );
 }
 
 ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
